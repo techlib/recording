@@ -114,7 +114,7 @@ if __name__ == '__main__':
             exit(1)
 
         group, port = stream.rsplit(':', 1)
-        port= int(port)
+        port = int(port)
 
         # Listen for video stream.
         vp = VideoProtocol(Recorder(output), group)
