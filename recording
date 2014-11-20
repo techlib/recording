@@ -35,7 +35,7 @@ class MuxerProtocol(ProcessProtocol):
         self.buffers = []
         self.status = None
 
-        argv = ['avconv', '-y', '-loglevel', 'fatal',
+        argv = ['ffmpeg', '-y', '-loglevel', 'fatal',
                           '-i', '/dev/fd/0', '-map', '0',
                           '-c:v', 'libx264', '-c:a', 'aac',
                           '-strict', '-2',
