@@ -105,6 +105,14 @@ class Recorder(object):
 
 if __name__ == '__main__':
     def do_start(stream, output):
+        if stream is None:
+            print >>stderr, 'No input stream specified!'
+            exit(1)
+
+        if not re.match('^.+:[0-9]+$', stream):
+            print >>stderr, 'Invalid stream specified, use `address:port` pair.'
+            exit(1)
+
         group, port = stream.rsplit(':', 1)
         port= int(port)
 
@@ -158,14 +166,6 @@ if __name__ == '__main__':
             stream = v
         elif k in ('--output-directory', '-o'):
             output = v
-
-    if stream is None:
-        print >>stderr, 'No input stream specified!'
-        exit(1)
-
-    if not re.match('^.+:[0-9]+$', stream):
-        print >>stderr, 'Invalid stream specified, use `address:port` pair.'
-        exit(1)
 
     # Perform the selected action.
     action(stream, output)
