@@ -1,0 +1,174 @@
+#!/usr/bin/python -tt
+
+# Twisted takes care of our TCP and UDP ports.
+from twisted.internet import reactor
+from twisted.internet.protocol import DatagramProtocol, ProcessProtocol
+
+# Command line arguments follow the GNU conventions.
+from getopt import gnu_getopt, GetoptError
+from sys import argv, stderr, exit
+
+# For output file names.
+from time import strftime
+
+# For validation.
+import re
+
+
+class VideoProtocol(DatagramProtocol):
+    def __init__(self, recorder, group):
+        self.recorder = recorder
+        self.group = group
+
+    def startProtocol(self):
+        print 'joining group %s' % (self.group,)
+        self.transport.joinGroup(self.group)
+
+    def datagramReceived(self, data, addr):
+        self.recorder.collect(data)
+
+
+class MuxerProtocol(ProcessProtocol):
+    def __init__(self, recorder, path):
+        self.recorder = recorder
+        self.path = path
+        self.buffers = []
+        self.status = None
+
+        argv = ['avconv', '-y', '-loglevel', 'fatal',
+                          '-i', '/dev/fd/0', '-map', '0',
+                          '-c:v', 'libx264', '-c:a', 'aac',
+                          '-strict', '-2',
+                          '-preset', 'superfast', path]
+
+        reactor.spawnProcess(self, argv[0], argv, {})
+
+    def connectionMade(self):
+        for buf in self.buffers:
+            self.transport.write(buf)
+
+        self.buffers = None
+
+    def errReceived(self, data):
+        print >>stderr, 'muxer: ' + data
+
+    def processEnded(self, reason):
+        self.status = reason
+        self.buffers = None
+        self.recorder.muxing_complete(self)
+
+    def write(self, data):
+        if self.buffers is None:
+            self.transport.write(data)
+        else:
+            self.buffers.append(data)
+
+    def close(self):
+        self.transport.closeStdin()
+
+
+class Recorder(object):
+    def __init__(self, path):
+        self.path = path
+
+        self.muxer = None
+        self.timeout = None
+
+        self.hour_timeout = None
+
+    def collect(self, data):
+        if self.muxer is None:
+            path = self.path + '/' + strftime('%Y-%m-%d-%H-%M-%S') + '.mkv'
+            print 'muxing to %s' % (path,)
+            self.muxer = MuxerProtocol(self, path)
+            self.timeout = reactor.callLater(60, self.on_timeout)
+            self.hour_timeout = reactor.callLater(3600, self.on_hour_timeout)
+
+        self.timeout.reset(60)
+        self.muxer.write(data)
+
+    def on_timeout(self):
+        self.muxer.close()
+        self.muxer = None
+        self.hour_timeout.cancel()
+
+    def on_hour_timeout(self):
+        self.muxer.close()
+        self.muxer = None
+        self.timeout.cancel()
+
+    def muxing_complete(self, muxer):
+        print 'muxing complete: %s' % (muxer.path,)
+        if self.muxer == muxer:
+            self.muxer = None
+
+
+if __name__ == '__main__':
+    def do_start(stream, output):
+        group, port = stream.rsplit(':', 1)
+        port= int(port)
+
+        # Listen for video stream.
+        vp = VideoProtocol(Recorder(output), group)
+        reactor.listenMulticast(port, vp, listenMultiple=True)
+
+        # Run twisted.
+        reactor.run()
+
+
+    def do_help(*args, **kwargs):
+        print 'Usage: recording --stream=stream [--output-directory=.]'
+        print 'Saves recordings of that stream in the output directory.'
+        print 'When no data have been received for at least one minute,'
+        print 'the output file is properly closed.'
+        print ''
+        print 'The source stream is specified as `host:port` and is treated'
+        print 'as an multicast group address and destination port.'
+        print ''
+        print 'OPTIONS:'
+        print '  --help, -h            Display this help.'
+        print '  --version, -V         Display version info.'
+        print ''
+        print '  --stream, -s stream   Address of the stream to receive.'
+        print '  --output-dir, -o .    Output directory.'
+        print ''
+        print 'Report bugs to <helpdeskict@techlib.cz>.'
+
+    def do_version(*args, **kwargs):
+        print 'recording (NTK) 1'
+
+    # Parse command line arguments.
+    try:
+        opts, args = gnu_getopt(argv, 'hVs:o:', ['help', 'version', 'stream=', 'output-directory='])
+    except GetoptError, e:
+        print >>stderr, e
+        print >>stderr, 'Try `recording --help` for more information.'
+        exit(1)
+
+    action = do_start
+    output = '.'
+    stream = None
+
+    for k, v in opts:
+        if k in ('--help', '-h'):
+            action = do_help
+        elif k in ('--version', '-V'):
+            action = do_version
+        elif k in ('--stream', '-s'):
+            stream = v
+        elif k in ('--output-directory', '-o'):
+            output = v
+
+    if stream is None:
+        print >>stderr, 'No input stream specified!'
+        exit(1)
+
+    if not re.match('^.+:[0-9]+$', stream):
+        print >>stderr, 'Invalid stream specified, use `address:port` pair.'
+        exit(1)
+
+    # Perform the selected action.
+    action(stream, output)
+
+# vim:set sw=4 ts=4 et:
+# -*- coding: utf-8 -*-
